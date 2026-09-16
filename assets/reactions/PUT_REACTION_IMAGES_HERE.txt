@@ -1,0 +1,1 @@
+Put Saphira reaction PNGs in this folder. Recommended names are listed in the main README.
