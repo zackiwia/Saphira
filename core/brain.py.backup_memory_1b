@@ -1,10 +1,7 @@
-﻿import json
+import json
 import re
 import urllib.error
 import urllib.request
-from pathlib import Path
-
-from memory.manager import MemoryManager
 
 
 class SaphiraBrain:
@@ -17,9 +14,6 @@ class SaphiraBrain:
         self.model = config["ollama"]["model"]
         self.system_prompt = config["saphira"]["system_prompt"]
         self.history = []
-
-        memory_path = Path(__file__).resolve().parents[1] / "memory" / "memories.json"
-        self.memory = MemoryManager(memory_path)
 
     def _extract_json(self, text: str):
         if not text:
@@ -35,7 +29,6 @@ class SaphiraBrain:
 
         start = text.find("{")
         end = text.rfind("}")
-
         if start != -1 and end > start:
             try:
                 return json.loads(text[start:end + 1])
@@ -65,75 +58,9 @@ class SaphiraBrain:
 
         return data.get("message", {}).get("content", "")
 
-    def _explicit_memory(self, user_text):
-        """
-        Detect an explicit request to remember something.
-
-        Returns the memory text or None.
-        """
-        patterns = [
-            r"^\s*remember\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
-            r"^\s*please\s+remember\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
-            r"^\s*don't\s+forget\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
-            r"^\s*do\s+not\s+forget\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
-        ]
-
-        for pattern in patterns:
-            match = re.match(pattern, user_text, re.IGNORECASE)
-
-            if match:
-                memory = match.group(1).strip()
-
-                if memory:
-                    return memory
-
-        return None
-
-    def _handle_explicit_memory(self, user_text):
-        memory_text = self._explicit_memory(user_text)
-
-        if memory_text is None:
-            return None
-
-        if self.memory.add(memory_text):
-            message = f"Got it. I'll remember that {memory_text}."
-            emotion = "happy"
-        else:
-            message = "Hmph... I couldn't save that memory."
-            emotion = "neutral"
-
-        self.history.append({
-            "role": "user",
-            "content": user_text
-        })
-
-        self.history.append({
-            "role": "assistant",
-            "content": message
-        })
-
-        return {
-            "message": message,
-            "emotion": emotion,
-        }
-
     def reply(self, user_text):
-        explicit_memory = self._handle_explicit_memory(user_text)
-
-        if explicit_memory is not None:
-            return explicit_memory
-
-        self.history.append({
-            "role": "user",
-            "content": user_text
-        })
-
-        messages = [
-            {
-                "role": "system",
-                "content": self.system_prompt
-            }
-        ] + self.history[-12:]
+        self.history.append({"role": "user", "content": user_text})
+        messages = [{"role": "system", "content": self.system_prompt}] + self.history[-12:]
 
         try:
             content = self._call_ollama(messages)
@@ -146,29 +73,19 @@ class SaphiraBrain:
                 }
 
             message = str(result.get("message", "...")).strip()
-            emotion = str(
-                result.get("emotion", "neutral")
-            ).lower().strip()
+            emotion = str(result.get("emotion", "neutral")).lower().strip()
 
             if emotion not in self.ALLOWED_EMOTIONS:
                 emotion = "neutral"
 
-            self.history.append({
-                "role": "assistant",
-                "content": message
-            })
-
-            return {
-                "message": message,
-                "emotion": emotion
-            }
+            self.history.append({"role": "assistant", "content": message})
+            return {"message": message, "emotion": emotion}
 
         except urllib.error.URLError as exc:
             return {
                 "message": f"I can't reach Ollama right now: {exc}",
                 "emotion": "neutral",
             }
-
         except Exception as exc:
             return {
                 "message": f"Something went wrong: {exc}",
@@ -194,45 +111,21 @@ Return ONLY valid JSON:
   "emotion": "neutral|happy|shocked"
 }}
 """
-
-        messages = [
-            {
-                "role": "system",
-                "content": prompt
-            }
-        ]
-
+        messages = [{"role": "system", "content": prompt}]
         try:
-            content = self._call_ollama(
-                messages,
-                temperature=0.95
-            )
-
+            content = self._call_ollama(messages, temperature=0.95)
             result = self._extract_json(content)
-
             if not isinstance(result, dict):
-                return {
-                    "message": "You're awfully quiet over there...",
-                    "emotion": "neutral"
-                }
+                return {"message": "You're awfully quiet over there...", "emotion": "neutral"}
 
-            emotion = str(
-                result.get("emotion", "neutral")
-            ).lower().strip()
-
+            emotion = str(result.get("emotion", "neutral")).lower().strip()
             if emotion not in self.ALLOWED_EMOTIONS:
                 emotion = "neutral"
 
             return {
-                "message": str(
-                    result.get(
-                        "message",
-                        "You're awfully quiet over there..."
-                    )
-                ).strip(),
+                "message": str(result.get("message", "You're awfully quiet over there...")).strip(),
                 "emotion": emotion,
             }
-
         except Exception:
             return {
                 "message": "You're awfully quiet over there... what are you doing?",

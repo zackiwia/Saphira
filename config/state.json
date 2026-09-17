@@ -1,8 +1,8 @@
 {
   "preferred_x": 500,
   "preferred_y": 627,
-  "mood": "startled",
-  "emotion": "shocked",
+  "mood": "neutral",
+  "emotion": "neutral",
   "activity": "idle",
-  "horn_strikes": 4
+  "horn_strikes": 0
 }
