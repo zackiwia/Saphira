@@ -26,8 +26,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.animation import Animation, AnimationController
+from core.animation import (
+    Animation,
+    AnimationController,
+    AnimationSystem,
+)
 from core.state import SaphiraState
+from ui.animation_renderer import SaphiraAnimationRenderer
 from vision.saphira_vision import SaphiraVision
 
 
@@ -96,6 +101,17 @@ class SaphiraWindow(QWidget):
         self.animation_timer.start(16)
 
         self.register_base_animations()
+
+        # File-based Animation Engine 1.1.
+        self.animation_root = (
+            Path(__file__).resolve().parents[1]
+            / "assets"
+            / "animations"
+        )
+
+        self.animation_system = None
+        self.animation_renderer = None
+
         self.last_interaction = time.monotonic()
         self.idle_started_at = None
         self.idle_spoke = False
@@ -132,6 +148,12 @@ class SaphiraWindow(QWidget):
         # Give the chat input focus when Saphira starts.
         self.input_box.setFocus()
 
+        # Begin in the idle animation state.
+        self.play_animation(
+            "idle",
+            force=True,
+        )
+
         self.behavior_timer = QTimer(self)
         self.behavior_timer.timeout.connect(self.update_behavior)
         self.behavior_timer.start(250)
@@ -143,25 +165,15 @@ class SaphiraWindow(QWidget):
     # ---------- Animation engine ----------
 
     def register_base_animations(self):
-        """
-        Register the initial animation states.
-
-        These are intentionally renderer-light placeholders.
-
-        The engine is being integrated before we create the final animation
-        artwork. This lets us verify transitions, priorities, interruption,
-        and timing using the real Saphira window first.
-        """
+        """Register logical animation states."""
 
         self.animation_controller.register(
             "idle",
             lambda: Animation(
                 name="idle",
-                duration=1.0,
                 priority=1,
                 loop=True,
                 interruptible=True,
-                on_update=self._animation_idle_update,
             ),
         )
 
@@ -169,11 +181,9 @@ class SaphiraWindow(QWidget):
             "thinking",
             lambda: Animation(
                 name="thinking",
-                duration=0.0,
                 priority=5,
                 loop=True,
                 interruptible=True,
-                on_update=self._animation_thinking_update,
             ),
         )
 
@@ -181,11 +191,9 @@ class SaphiraWindow(QWidget):
             "talking",
             lambda: Animation(
                 name="talking",
-                duration=0.0,
                 priority=6,
                 loop=True,
                 interruptible=True,
-                on_update=self._animation_talking_update,
             ),
         )
 
@@ -193,7 +201,6 @@ class SaphiraWindow(QWidget):
             "reaction",
             lambda: Animation(
                 name="reaction",
-                duration=0.35,
                 priority=7,
                 loop=False,
                 interruptible=True,
@@ -204,86 +211,144 @@ class SaphiraWindow(QWidget):
             "horn_dodge",
             lambda: Animation(
                 name="horn_dodge",
-                duration=0.55,
                 priority=9,
                 loop=False,
                 interruptible=False,
             ),
         )
 
-    def play_animation(self, name, force=False):
+        self.animation_controller.register(
+            "opening",
+            lambda: Animation(
+                name="opening",
+                priority=10,
+                loop=False,
+                interruptible=False,
+            ),
+        )
+
+    def play_animation(
+        self,
+        name,
+        force=False,
+    ):
         """
-        Public entry point for future behavior systems.
-
-        Example:
-
-            self.play_animation("thinking")
-            self.play_animation("talking")
-            self.play_animation("idle")
+        Select a logical animation and, when artwork exists,
+        play its prepared animation files.
         """
 
         try:
-            return self.animation_controller.play(
-                name,
-                force=force,
+            activated = (
+                self.animation_controller.play(
+                    name,
+                    force=force,
+                )
             )
         except KeyError:
             print(
-                f"SAPHIRA ANIMATION: Unknown animation '{name}'"
+                f"SAPHIRA ANIMATION: "
+                f"Unknown animation '{name}'"
             )
             return False
 
-    def update_animations(self):
-        """
-        Animation heartbeat.
+        if not activated:
+            return False
 
-        60-ish updates per second gives us enough resolution for smooth
-        animation once actual movement/layer interpolation is introduced.
-        """
+        if (
+            self.animation_system is not None
+            and self.animation_system.has_asset(name)
+        ):
+            asset = self.animation_system.manager.get(name)
+
+            # Synchronize the logical animation state with the
+            # actual file animation. This prevents the controller
+            # from finishing a one-shot animation before the
+            # visual frame sequence has finished.
+            if asset is not None:
+                frame_count = max(
+                    1,
+                    asset.frame_count,
+                )
+
+                fps = (
+                    asset.fps
+                    if asset.fps > 0
+                    else 12.0
+                )
+
+                self.animation_controller.current.duration = (
+                    frame_count / fps
+                )
+
+                self.animation_controller.current.loop = (
+                    asset.loop
+                )
+
+            self.animation_system.play(
+                name,
+                restart=True,
+            )
+
+            print(
+                f"SAPHIRA ANIMATION: "
+                f"Playing '{name}' "
+                f"({asset.frame_count} frames @ "
+                f"{asset.fps:g} FPS)"
+            )
+        else:
+            print(
+                f"SAPHIRA ANIMATION: "
+                f"'{name}' selected; "
+                f"waiting for animation artwork."
+            )
+
+        return True
+
+    def _on_animation_finished(
+        self,
+        name,
+    ):
+        """Return one-shot visual animations to idle."""
+
+        if name not in {
+            "reaction",
+            "horn_dodge",
+            "opening",
+        }:
+            return
+
+        if (
+            self.animation_controller.current_name
+            == name
+        ):
+            self.animation_controller.stop()
+
+        self.play_animation(
+            "idle",
+            force=True,
+        )
+
+    def update_animations(self):
+        """Advance logical and visual animation systems."""
 
         self.animation_controller.update()
 
-    def _animation_idle_update(self, progress):
-        """
-        Placeholder idle update.
-
-        Currently this intentionally does not alter the artwork.
-
-        Actual breathing, blinking, tail, wing, and body motion will be
-        added after the engine is verified inside the live application.
-        """
-        return
-
-    def _animation_thinking_update(self, progress):
-        """
-        Placeholder thinking update.
-
-        The final version will drive:
-        - thinking pose
-        - cheek tap
-        - eyes
-        - thought bubble
-        - subtle body motion
-        """
-        return
-
-    def _animation_talking_update(self, progress):
-        """
-        Placeholder talking update.
-
-        The final version will drive:
-        - mouth movement
-        - subtle head/body motion
-        - text reveal timing
-        """
-        return
+        if self.animation_system is not None:
+            self.animation_system.update()
 
     def animation_state(self):
-        """
-        Return the current animation state for debugging and future
-        behavior logic.
-        """
-        return self.animation_controller.snapshot()
+        """Return logical and visual animation state."""
+
+        return {
+            "controller": (
+                self.animation_controller.snapshot()
+            ),
+            "visual": (
+                self.animation_system.snapshot()
+                if self.animation_system is not None
+                else {}
+            ),
+        }
 
     # ---------- Windows capture exclusion ----------
 
@@ -409,6 +474,25 @@ class SaphiraWindow(QWidget):
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        self.animation_renderer = (
+            SaphiraAnimationRenderer(
+                self.image_label,
+                Path(__file__).resolve().parents[1]
+                / "assets"
+                / "reactions",
+            )
+        )
+
+        self.animation_system = AnimationSystem(
+            self.animation_root,
+            frame_callback=(
+                self.animation_renderer.show_frame
+            ),
+            finished_callback=(
+                self._on_animation_finished
+            ),
+        )
 
         self.chat_box = QTextEdit(self)
         self.chat_box.setReadOnly(True)
