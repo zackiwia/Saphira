@@ -1,0 +1,343 @@
+﻿import json
+import re
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+from memory.manager import MemoryManager
+
+
+class SaphiraBrain:
+    """Ollama-powered brain for Saphira."""
+
+    ALLOWED_EMOTIONS = {"neutral", "happy", "shocked"}
+
+    def __init__(self, config):
+        self.base_url = config["ollama"]["url"].rstrip("/")
+        self.model = config["ollama"]["model"]
+        self.system_prompt = config["saphira"]["system_prompt"]
+        self.history = []
+
+        memory_path = Path(__file__).resolve().parents[1] / "memory" / "memories.json"
+        self.memory = MemoryManager(memory_path)
+
+    def _extract_json(self, text: str):
+        if not text:
+            return None
+
+        text = text.strip()
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start != -1 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                return None
+
+        return None
+
+    def _call_ollama(self, messages, temperature=0.8):
+        payload = json.dumps({
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": temperature},
+        }).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        return data.get("message", {}).get("content", "")
+
+    def _explicit_memory(self, user_text):
+        """
+        Detect an explicit request to remember something.
+
+        Returns the memory text or None.
+        """
+        patterns = [
+            r"^\s*remember\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
+            r"^\s*please\s+remember\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
+            r"^\s*don't\s+forget\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
+            r"^\s*do\s+not\s+forget\s+(?:that\s+)?(.+?)\s*[.!?]?\s*$",
+        ]
+
+        for pattern in patterns:
+            match = re.match(pattern, user_text, re.IGNORECASE)
+
+            if match:
+                memory = match.group(1).strip()
+
+                if memory:
+                    return memory
+
+        return None
+
+    def _handle_explicit_memory(self, user_text):
+        memory_text = self._explicit_memory(user_text)
+
+        if memory_text is None:
+            return None
+
+        if self.memory.add(memory_text):
+            message = f"Got it. I'll remember that {memory_text}."
+            emotion = "happy"
+        else:
+            message = "Hmph... I couldn't save that memory."
+            emotion = "neutral"
+
+        self.history.append({
+            "role": "user",
+            "content": user_text
+        })
+
+        self.history.append({
+            "role": "assistant",
+            "content": message
+        })
+
+        return {
+            "message": message,
+            "emotion": emotion,
+        }
+
+    def _detect_auto_memory(self, user_text):
+        """
+        Ask Ollama whether a normal conversation message contains
+        a useful long-term personal fact.
+
+        This function ONLY detects a candidate.
+        It does NOT save anything.
+        """
+
+        prompt = f"""
+You are Saphira's memory detector.
+
+Decide whether the user's message contains a useful personal fact
+that would reasonably help Saphira understand or remember the user
+in future conversations.
+
+Good candidates include:
+- preferences
+- favorite things
+- hobbies
+- ongoing projects
+- important goals
+- recurring activities
+- useful personal circumstances
+- names of important people, pets, or characters
+- stable likes or dislikes
+
+Do NOT select:
+- random temporary statements
+- ordinary conversation
+- questions with no personal fact
+- jokes
+- greetings
+- facts about unrelated public topics
+- information that is obviously only relevant to this single message
+
+Only identify information about the user or their ongoing context.
+
+User message:
+{user_text}
+
+Return ONLY valid JSON in exactly this format:
+
+{{
+  "should_remember": true,
+  "memory": "short clear description of the useful fact"
+}}
+
+If there is nothing worth remembering:
+
+{{
+  "should_remember": false,
+  "memory": ""
+}}
+"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": prompt
+            }
+        ]
+
+        try:
+            content = self._call_ollama(
+                messages,
+                temperature=0.1
+            )
+
+            result = self._extract_json(content)
+
+            if not isinstance(result, dict):
+                return {
+                    "should_remember": False,
+                    "memory": ""
+                }
+
+            should_remember = result.get("should_remember", False)
+            memory = str(result.get("memory", "")).strip()
+
+            return {
+                "should_remember": bool(should_remember) and bool(memory),
+                "memory": memory
+            }
+
+        except Exception:
+            return {
+                "should_remember": False,
+                "memory": ""
+            }
+
+    def reply(self, user_text):
+        explicit_memory = self._handle_explicit_memory(user_text)
+
+        if explicit_memory is not None:
+            return explicit_memory
+
+        auto_memory = self._detect_auto_memory(user_text)
+
+        if auto_memory.get("should_remember"):
+            memory_text = auto_memory.get("memory", "").strip()
+
+            if memory_text:
+                self.memory.add_unique(memory_text)
+
+        self.history.append({
+            "role": "user",
+            "content": user_text
+        })
+
+        messages = [
+            {
+                "role": "system",
+                "content": self.system_prompt
+            }
+        ] + self.history[-12:]
+
+        try:
+            content = self._call_ollama(messages)
+            result = self._extract_json(content)
+
+            if not isinstance(result, dict):
+                result = {
+                    "message": "Hmph... I couldn't understand that response.",
+                    "emotion": "neutral",
+                }
+
+            message = str(result.get("message", "...")).strip()
+            emotion = str(
+                result.get("emotion", "neutral")
+            ).lower().strip()
+
+            if emotion not in self.ALLOWED_EMOTIONS:
+                emotion = "neutral"
+
+            self.history.append({
+                "role": "assistant",
+                "content": message
+            })
+
+            return {
+                "message": message,
+                "emotion": emotion,
+                "memory_candidate": auto_memory
+            }
+
+        except urllib.error.URLError as exc:
+            return {
+                "message": f"I can't reach Ollama right now: {exc}",
+                "emotion": "neutral",
+                "memory_candidate": auto_memory
+            }
+
+        except Exception as exc:
+            return {
+                "message": f"Something went wrong: {exc}",
+                "emotion": "neutral",
+                "memory_candidate": auto_memory
+            }
+
+    def idle_prompt(self, context=""):
+        prompt = f"""
+You are Saphira, a mildly tsundere dragon-girl desktop companion.
+The user has not interacted with you for about a minute.
+
+Recent conversation/context:
+{context or "(No useful recent context.)"}
+
+Start a natural, short conversation on your own.
+Prefer a topic related to what the user was recently talking about, playing,
+working on, or doing. Do not claim to see the user's screen; you do not have
+vision yet. If there is no useful context, choose a light everyday topic.
+
+Return ONLY valid JSON:
+{{
+  "message": "short thing Saphira would say",
+  "emotion": "neutral|happy|shocked"
+}}
+"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": prompt
+            }
+        ]
+
+        try:
+            content = self._call_ollama(
+                messages,
+                temperature=0.95
+            )
+
+            result = self._extract_json(content)
+
+            if not isinstance(result, dict):
+                return {
+                    "message": "You're awfully quiet over there...",
+                    "emotion": "neutral"
+                }
+
+            emotion = str(
+                result.get("emotion", "neutral")
+            ).lower().strip()
+
+            if emotion not in self.ALLOWED_EMOTIONS:
+                emotion = "neutral"
+
+            return {
+                "message": str(
+                    result.get(
+                        "message",
+                        "You're awfully quiet over there..."
+                    )
+                ).strip(),
+                "emotion": emotion,
+            }
+
+        except Exception:
+            return {
+                "message": "You're awfully quiet over there... what are you doing?",
+                "emotion": "neutral",
+            }
+

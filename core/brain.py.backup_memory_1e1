@@ -84,18 +84,160 @@ class SaphiraBrain:
 
         return None
 
+    def _decide_memory_action(self, memory_text):
+        memories = self.memory.get_all()
+
+        if not memories:
+            return {
+                "action": "add",
+                "existing_memory": "",
+                "memory": memory_text
+            }
+
+        memory_list = "\n".join(
+            f"{index}: {memory}"
+            for index, memory in enumerate(memories)
+        )
+
+        prompt = f"""
+You are Saphira's memory manager.
+
+A new personal fact has been detected from the user.
+
+Your job is to decide what should happen to Saphira's existing memories.
+
+NEW FACT:
+{memory_text}
+
+EXISTING MEMORIES:
+{memory_list}
+
+Choose exactly ONE action:
+
+1. "add"
+Use this when the new fact is genuinely new information that should be
+stored separately.
+
+2. "update"
+Use this when the new fact replaces, changes, corrects, or supersedes
+an existing memory.
+
+3. "none"
+Use this when the information is already represented by an existing
+memory, is temporary, or is not useful as a long-term memory.
+
+If using "update", identify the EXACT existing memory text that should
+be replaced.
+
+Return ONLY valid JSON:
+
+{{
+  "action": "add",
+  "existing_memory": "",
+  "memory": "{memory_text}"
+}}
+"""
+
+        try:
+            content = self._call_ollama(
+                [{"role": "system", "content": prompt}],
+                temperature=0.1
+            )
+
+            result = self._extract_json(content)
+
+            if not isinstance(result, dict):
+                return {
+                    "action": "add",
+                    "existing_memory": "",
+                    "memory": memory_text
+                }
+
+            action = str(
+                result.get("action", "add")
+            ).lower().strip()
+
+            existing_memory = str(
+                result.get("existing_memory", "")
+            ).strip()
+
+            new_memory = str(
+                result.get("memory", memory_text)
+            ).strip()
+
+            if action not in {"add", "update", "none"}:
+                action = "add"
+
+            if not new_memory and action != "none":
+                new_memory = memory_text
+
+            return {
+                "action": action,
+                "existing_memory": existing_memory,
+                "memory": new_memory
+            }
+
+        except Exception:
+            return {
+                "action": "add",
+                "existing_memory": "",
+                "memory": memory_text
+            }
+
+    def _store_memory(self, memory_text):
+        if not isinstance(memory_text, str):
+            return "ignored"
+
+        memory_text = memory_text.strip()
+
+        if not memory_text:
+            return "ignored"
+
+        decision = self._decide_memory_action(memory_text)
+
+        action = decision.get("action", "add")
+        existing_memory = decision.get("existing_memory", "").strip()
+        new_memory = decision.get("memory", memory_text).strip()
+
+        if action == "none":
+            return "ignored"
+
+        if action == "update" and existing_memory:
+            memories = self.memory.get_all()
+
+            for index, existing in enumerate(memories):
+                if existing == existing_memory:
+                    if self.memory.update(index, new_memory):
+                        return "updated"
+
+            similar_index = self.memory.find_similar(existing_memory)
+
+            if similar_index is not None:
+                if self.memory.update(similar_index, new_memory):
+                    return "updated"
+
+        if self.memory.add_unique(new_memory):
+            return "added"
+
+        return "duplicate"
+
     def _handle_explicit_memory(self, user_text):
         memory_text = self._explicit_memory(user_text)
 
         if memory_text is None:
             return None
 
-        if self.memory.add_unique(memory_text):
+        result = self._store_memory(memory_text)
+
+        if result in {"added", "updated"}:
             message = f"Got it. I'll remember that {memory_text}."
             emotion = "happy"
+        elif result == "duplicate":
+            message = "Hmph... I already remember that."
+            emotion = "neutral"
         else:
-            message = "I already have that tucked away in my memory."
-            emotion = "happy"
+            message = "Hmph... I couldn't save that memory."
+            emotion = "neutral"
 
         self.history.append({
             "role": "user",
@@ -160,16 +302,9 @@ If there is nothing worth remembering:
 }}
 """
 
-        messages = [
-            {
-                "role": "system",
-                "content": prompt
-            }
-        ]
-
         try:
             content = self._call_ollama(
-                messages,
+                [{"role": "system", "content": prompt}],
                 temperature=0.1
             )
 
@@ -196,32 +331,47 @@ If there is nothing worth remembering:
             }
 
     def _retrieve_memories(self, user_text, limit=5):
+        """
+        Find memories that are relevant to the current user message.
+
+        This first performs a lightweight word-overlap search so we do not
+        send every saved memory to Ollama on every conversation turn.
+        """
+
         memories = self.memory.get_all()
 
         if not memories:
             return []
 
         user_words = set(
-            re.findall(r"\b[a-zA-Z0-9']+\b", user_text.lower())
+            re.findall(r"[a-z0-9]+", user_text.lower())
         )
+
+        if not user_words:
+            return []
 
         scored = []
 
         for index, memory in enumerate(memories):
             memory_words = set(
-                re.findall(r"\b[a-zA-Z0-9']+\b", memory.lower())
+                re.findall(r"[a-z0-9]+", memory.lower())
             )
 
             if not memory_words:
                 continue
 
-            overlap = len(user_words & memory_words)
+            overlap = user_words & memory_words
 
-            if overlap > 0:
-                scored.append((overlap, index, memory))
+            if not overlap:
+                continue
+
+            score = len(overlap) / len(memory_words)
+
+            scored.append((score, index, memory))
 
         scored.sort(
-            key=lambda item: (-item[0], item[1])
+            key=lambda item: (item[0], item[1]),
+            reverse=True
         )
 
         return [
@@ -229,283 +379,28 @@ If there is nothing worth remembering:
             for _, _, memory in scored[:limit]
         ]
 
-    def _build_memory_context(self, memories):
+    def _build_memory_context(self, user_text):
+        memories = self._retrieve_memories(user_text)
+
         if not memories:
             return ""
 
-        lines = [
-            "These are stored memories about the person you are talking to.",
-            "Use them only when relevant. Treat them as factual memory.",
-            "Never refer to the person as 'the user' when speaking to them.",
-            "Speak directly to them using 'you' and 'your'.",
-            ""
-        ]
-
-        for memory in memories:
-            lines.append(f"- {memory}")
-
-        return "\n".join(lines)
-
-    def _memory_view_request(self, user_text):
-        text = user_text.lower().strip()
-
-        phrases = [
-            "what do you remember",
-            "what do you remember about me",
-            "tell me what you remember",
-            "what do you know about me",
-            "what memories do you have",
-            "show me what you remember",
-        ]
-
-        return any(
-            phrase in text
-            for phrase in phrases
-        )
-
-    def _handle_memory_view(self):
-        memories = self.memory.get_all()
-
-        if not memories:
-            return {
-                "message": (
-                    "Hmm... I don't have any long-term memories about you yet."
-                ),
-                "emotion": "neutral",
-            }
-
-        memory_text = "\n".join(
+        memory_lines = "\n".join(
             f"- {memory}"
             for memory in memories
         )
 
-        prompt = f"""
-You are Saphira, a mildly tsundere dragon-girl AI companion.
+        return f"""
+Relevant long-term memories about the user:
 
-The person you're talking to asked:
+{memory_lines}
 
-"What do you remember about me?"
-
-Below are the memories Saphira is actually allowed to know.
-
-STORED MEMORIES:
-{memory_text}
-
-Your job is to turn those memories into a natural conversation with
-the person.
-
-Important rules:
-
-- Talk directly to the person using "you" and "your".
-- NEVER say "the user".
-- NEVER say "the user likes", "the user enjoys", or similar database language.
-- Do not simply print a numbered list.
-- Do not mention the memory system, database, detector, prompt, or internal process.
-- Do not invent facts that are not contained in the stored memories.
-- You may combine related memories naturally.
-- Keep the response reasonably concise.
-- Sound like Saphira actually knows the person and is talking to them.
-- Keep Saphira's mildly tsundere personality.
-- It is okay to sound warm, playful, teasing, or slightly embarrassed.
-- If there are many memories, summarize them naturally instead of listing every item.
-
-Return ONLY valid JSON:
-
-{{
-  "message": "natural conversational response from Saphira",
-  "emotion": "neutral|happy|shocked"
-}}
+Use these memories when they are relevant to the user's message.
+Do not mention the memory system itself unless the user asks about it.
+Do not invent information that is not present in the memories.
 """
-
-        messages = [
-            {
-                "role": "system",
-                "content": prompt
-            }
-        ]
-
-        try:
-            content = self._call_ollama(
-                messages,
-                temperature=0.75
-            )
-
-            result = self._extract_json(content)
-
-            if not isinstance(result, dict):
-                return {
-                    "message": "Hmm... I remember some things about you, but I can't seem to put them into words properly.",
-                    "emotion": "neutral"
-                }
-
-            message = str(
-                result.get(
-                    "message",
-                    "Hmm... I remember some things about you."
-                )
-            ).strip()
-
-            emotion = str(
-                result.get("emotion", "neutral")
-            ).lower().strip()
-
-            if emotion not in self.ALLOWED_EMOTIONS:
-                emotion = "neutral"
-
-            self.history.append({
-                "role": "user",
-                "content": "What do you remember about me?"
-            })
-
-            self.history.append({
-                "role": "assistant",
-                "content": message
-            })
-
-            return {
-                "message": message,
-                "emotion": emotion,
-            }
-
-        except Exception as exc:
-            return {
-                "message": f"Hmph... I know I remember things about you, but something went wrong: {exc}",
-                "emotion": "neutral"
-            }
-
-    def _decide_memory_action(self, new_memory):
-        existing = self.memory.get_all()
-
-        if not existing:
-            return {
-                "action": "add",
-                "index": None
-            }
-
-        memories_text = "\n".join(
-            f"{index}: {memory}"
-            for index, memory in enumerate(existing)
-        )
-
-        prompt = f"""
-You are Saphira's memory manager.
-
-A new personal fact has been detected:
-
-NEW MEMORY:
-{new_memory}
-
-Existing memories:
-
-{memories_text}
-
-Decide what should happen.
-
-Use:
-- "add" if this is genuinely new information.
-- "update" if it clearly changes or replaces an existing memory.
-- "none" if the information is already represented by an existing memory.
-
-If updating, provide the index of the existing memory being replaced.
-
-Return ONLY valid JSON:
-
-{{
-  "action": "add|update|none",
-  "index": null
-}}
-
-For "update", index must be the number of the existing memory.
-For "add" or "none", index must be null.
-"""
-
-        try:
-            content = self._call_ollama(
-                [
-                    {
-                        "role": "system",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.1
-            )
-
-            result = self._extract_json(content)
-
-            if not isinstance(result, dict):
-                return {
-                    "action": "none",
-                    "index": None
-                }
-
-            action = str(
-                result.get("action", "none")
-            ).lower().strip()
-
-            index = result.get("index")
-
-            if action not in {"add", "update", "none"}:
-                action = "none"
-
-            if action == "update":
-                try:
-                    index = int(index)
-
-                    if index < 0 or index >= len(existing):
-                        return {
-                            "action": "add",
-                            "index": None
-                        }
-
-                except (TypeError, ValueError):
-                    return {
-                        "action": "add",
-                        "index": None
-                    }
-            else:
-                index = None
-
-            return {
-                "action": action,
-                "index": index
-            }
-
-        except Exception:
-            similar_index = self.memory.find_similar(new_memory)
-
-            if similar_index is not None:
-                return {
-                    "action": "update",
-                    "index": similar_index
-                }
-
-            return {
-                "action": "add",
-                "index": None
-            }
-
-    def _store_memory(self, memory_text):
-        decision = self._decide_memory_action(memory_text)
-
-        action = decision.get("action")
-        index = decision.get("index")
-
-        if action == "update" and index is not None:
-            if self.memory.update(index, memory_text):
-                return "update"
-
-            return "none"
-
-        if action == "add":
-            if self.memory.add_unique(memory_text):
-                return "add"
-
-        return "none"
 
     def reply(self, user_text):
-        if self._memory_view_request(user_text):
-            return self._handle_memory_view()
-
         explicit_memory = self._handle_explicit_memory(user_text)
 
         if explicit_memory is not None:
@@ -521,28 +416,17 @@ For "add" or "none", index must be null.
             if memory_text:
                 memory_action = self._store_memory(memory_text)
 
-        retrieved_memories = self._retrieve_memories(
-            user_text,
-            limit=5
-        )
-
-        memory_context = self._build_memory_context(
-            retrieved_memories
-        )
-
         self.history.append({
             "role": "user",
             "content": user_text
         })
 
+        memory_context = self._build_memory_context(user_text)
+
         system_content = self.system_prompt
 
         if memory_context:
-            system_content += (
-                "\n\n"
-                "RELEVANT LONG-TERM MEMORY:\n"
-                f"{memory_context}"
-            )
+            system_content += "\n\n" + memory_context
 
         messages = [
             {
@@ -561,9 +445,7 @@ For "add" or "none", index must be null.
                     "emotion": "neutral",
                 }
 
-            message = str(
-                result.get("message", "...")
-            ).strip()
+            message = str(result.get("message", "...")).strip()
 
             emotion = str(
                 result.get("emotion", "neutral")
@@ -582,7 +464,7 @@ For "add" or "none", index must be null.
                 "emotion": emotion,
                 "memory_candidate": auto_memory,
                 "memory_action": memory_action,
-                "retrieved_memories": retrieved_memories
+                "retrieved_memories": self._retrieve_memories(user_text)
             }
 
         except urllib.error.URLError as exc:
@@ -591,7 +473,7 @@ For "add" or "none", index must be null.
                 "emotion": "neutral",
                 "memory_candidate": auto_memory,
                 "memory_action": memory_action,
-                "retrieved_memories": retrieved_memories
+                "retrieved_memories": self._retrieve_memories(user_text)
             }
 
         except Exception as exc:
@@ -600,7 +482,7 @@ For "add" or "none", index must be null.
                 "emotion": "neutral",
                 "memory_candidate": auto_memory,
                 "memory_action": memory_action,
-                "retrieved_memories": retrieved_memories
+                "retrieved_memories": self._retrieve_memories(user_text)
             }
 
     def idle_prompt(self, context=""):
@@ -623,16 +505,9 @@ Return ONLY valid JSON:
 }}
 """
 
-        messages = [
-            {
-                "role": "system",
-                "content": prompt
-            }
-        ]
-
         try:
             content = self._call_ollama(
-                messages,
+                [{"role": "system", "content": prompt}],
                 temperature=0.95
             )
 
