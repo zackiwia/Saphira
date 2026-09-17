@@ -1,0 +1,129 @@
+﻿import base64
+import json
+import urllib.request
+from pathlib import Path
+
+from PIL import ImageGrab
+
+
+class SaphiraVision:
+    def __init__(self, config):
+        ollama_config = config["ollama"]
+
+        self.base_url = ollama_config["url"].rstrip("/")
+        self.model = ollama_config.get(
+            "vision_model",
+            ollama_config["model"]
+        )
+
+    def capture_screen(self, output_path=None):
+        if output_path is None:
+            output_path = Path(__file__).parent / "latest_screen.png"
+        else:
+            output_path = Path(output_path)
+
+        image = ImageGrab.grab()
+        image.save(output_path)
+
+        return output_path
+
+    def analyze_image(self, image_path, prompt):
+        image_path = Path(image_path)
+
+        if not image_path.exists():
+            raise FileNotFoundError(
+                f"Vision image not found: {image_path}"
+            )
+
+        image_bytes = image_path.read_bytes()
+
+        if not image_bytes:
+            raise ValueError(
+                f"Vision image is empty: {image_path}"
+            )
+
+        image_data = base64.b64encode(image_bytes).decode("utf-8")
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "images": [image_data],
+                    "content": prompt
+                }
+            ],
+            "stream": False
+        }
+
+        data = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.base_url}/api/chat",
+            data=data,
+            headers={
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(request, timeout=120) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        return result.get(
+            "message", {}
+        ).get(
+            "content",
+            ""
+        )
+
+    def observe_screen(self):
+        prompt = """
+Analyze this screenshot for Saphira.
+
+Identify:
+- What application or game is visible.
+- What is currently happening.
+- Important things Saphira should know about.
+- Important readable text.
+
+Keep the response under 80 words.
+Do not describe every object.
+Do not invent information that cannot be clearly seen.
+"""
+
+        image_path = self.capture_screen()
+
+        print(
+            f"Vision model: {self.model}"
+        )
+        print(
+            f"Vision image: {image_path.name} "
+            f"({image_path.stat().st_size:,} bytes)"
+        )
+
+        return self.analyze_image(
+            image_path,
+            prompt
+        )
+    def see_screen(self, prompt=None):
+        if prompt is None:
+            return self.observe_screen()
+
+        image_path = self.capture_screen()
+
+        print(
+            f"Vision model: {self.model}"
+        )
+        print(
+            f"Vision image: {image_path.name} "
+            f"({image_path.stat().st_size:,} bytes)"
+        )
+
+        return self.analyze_image(
+            image_path,
+            prompt
+        )
+

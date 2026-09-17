@@ -1,0 +1,30 @@
+﻿import json
+
+from vision.screen import SaphiraVision
+
+
+with open(
+    "config/settings.json",
+    "r",
+    encoding="utf-8"
+) as file:
+    config = json.load(file)
+
+
+vision = SaphiraVision(config)
+
+print("")
+print("Capturing screen...")
+print("")
+
+result = vision.see_screen(
+    "Describe what you see on this screen. "
+    "Mention the main application or window visible, "
+    "important objects, and any clearly readable text. "
+    "Do not guess if something is unclear."
+)
+
+print("SAPHIRA VISION:")
+print("")
+print(result)
+print("")

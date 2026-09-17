@@ -1,0 +1,113 @@
+﻿import base64
+import json
+import urllib.request
+from pathlib import Path
+
+from PIL import ImageGrab
+
+
+class SaphiraVision:
+    """Basic screen-capture and Ollama vision system."""
+
+    def __init__(self, config):
+        self.base_url = config["ollama"]["url"].rstrip("/")
+        self.model = config["ollama"]["model"]
+
+    def capture_screen(self, output_path=None):
+        if output_path is None:
+            output_path = (
+                Path(__file__).resolve().parents[1]
+                / "vision"
+                / "latest_screen.png"
+            )
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        image = ImageGrab.grab()
+        image.save(output_path, format="PNG")
+
+        return output_path
+
+    def analyze_image(self, image_path, prompt):
+        image_path = Path(image_path)
+
+        if not image_path.exists():
+            raise FileNotFoundError(
+                f"Screenshot does not exist: {image_path}"
+            )
+
+        image_bytes = image_path.read_bytes()
+
+        if not image_bytes:
+            raise ValueError("Screenshot file is empty.")
+
+        image_data = base64.b64encode(
+            image_bytes
+        ).decode("ascii")
+
+        print(
+            f"Vision image: {image_path.name} "
+            f"({len(image_bytes):,} bytes)"
+        )
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+
+                    # Gemma 4 works best with the image
+                    # before the text prompt.
+                    "images": [image_data],
+
+                    "content": prompt
+                }
+            ],
+            "stream": False
+        }
+
+        payload_bytes = json.dumps(
+            payload
+        ).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.base_url}/api/chat",
+            data=payload_bytes,
+            headers={
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=120
+        ) as response:
+
+            response_data = response.read()
+
+        data = json.loads(
+            response_data.decode("utf-8")
+        )
+
+        message = data.get(
+            "message",
+            {}
+        )
+
+        return message.get(
+            "content",
+            ""
+        )
+
+    def see_screen(
+        self,
+        prompt="Describe what you see on my screen."
+    ):
+        screenshot = self.capture_screen()
+
+        return self.analyze_image(
+            screenshot,
+            prompt
+        )

@@ -32,20 +32,19 @@ class BrainWorker(QThread):
     finished = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, brain, user_text=None, idle=False, context="", vision_context=None):
+    def __init__(self, brain, user_text=None, idle=False, context=""):
         super().__init__()
         self.brain = brain
         self.user_text = user_text
         self.idle = idle
         self.context = context
-        self.vision_context = vision_context
 
     def run(self):
         try:
             if self.idle:
                 result = self.brain.idle_prompt(self.context)
             else:
-                result = self.brain.reply(self.user_text, vision_context=self.vision_context)
+                result = self.brain.reply(self.user_text)
             self.finished.emit(result)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -292,14 +291,7 @@ class SaphiraWindow(QWidget):
         self.input_box.setEnabled(False)
         self.state.data["activity"] = "thinking"
 
-        # Give Saphira's brain the most recent temporary visual observation.
-        vision_context = self.vision.get_observation()
-
-        self.worker = BrainWorker(
-            self.brain,
-            user_text=text,
-            vision_context=vision_context
-        )
+        self.worker = BrainWorker(self.brain, user_text=text)
         self.worker.finished.connect(self.on_brain_result)
         self.worker.failed.connect(self.on_brain_error)
         self.worker.finished.connect(self.cleanup_worker)

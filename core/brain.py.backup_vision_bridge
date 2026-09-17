@@ -502,7 +502,7 @@ For "add" or "none", index must be null.
 
         return "none"
 
-    def reply(self, user_text, vision_context=None):
+    def reply(self, user_text):
         if self._memory_view_request(user_text):
             return self._handle_memory_view()
 
@@ -536,18 +536,6 @@ For "add" or "none", index must be null.
         })
 
         system_content = self.system_prompt
-
-        if vision_context:
-            system_content += (
-                "\n\n"
-                "TEMPORARY VISUAL CONTEXT:\n"
-                "The following information was observed by Saphira's "
-                "vision system from the user's screen.\n"
-                "Treat this as temporary context only. "
-                "Do not save it as long-term memory unless the user "
-                "explicitly asks you to remember it.\n"
-                f"{vision_context}"
-            )
 
         if memory_context:
             system_content += (
@@ -678,4 +666,3 @@ Return ONLY valid JSON:
                 "message": "You're awfully quiet over there... what are you doing?",
                 "emotion": "neutral",
             }
-
