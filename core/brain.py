@@ -5,6 +5,7 @@ import urllib.request
 from pathlib import Path
 
 from memory.manager import MemoryManager
+from core.scheduler import SaphiraScheduler
 
 
 class SaphiraBrain:
@@ -20,6 +21,9 @@ class SaphiraBrain:
 
         memory_path = Path(__file__).resolve().parents[1] / "memory" / "memories.json"
         self.memory = MemoryManager(memory_path)
+
+        # Shared GPU inference scheduler.
+        self.scheduler = SaphiraScheduler()
 
     def _extract_json(self, text: str):
         if not text:
@@ -60,10 +64,28 @@ class SaphiraBrain:
             method="POST",
         )
 
-        with urllib.request.urlopen(request, timeout=120) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        def call_ollama():
+            with urllib.request.urlopen(
+                request,
+                timeout=120
+            ) as response:
+                data = json.loads(
+                    response.read().decode("utf-8")
+                )
 
-        return data.get("message", {}).get("content", "")
+            return data.get(
+                "message",
+                {}
+            ).get(
+                "content",
+                ""
+            )
+
+        # Only the GPU-heavy Ollama inference is scheduled.
+        return self.scheduler.run(
+            "brain",
+            call_ollama
+        )
 
     def _explicit_memory(self, user_text):
         patterns = [
@@ -678,4 +700,5 @@ Return ONLY valid JSON:
                 "message": "You're awfully quiet over there... what are you doing?",
                 "emotion": "neutral",
             }
+
 
