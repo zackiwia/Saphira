@@ -1,8 +1,8 @@
 {
-  "preferred_x": 30,
-  "preferred_y": 30,
+  "preferred_x": 1987,
+  "preferred_y": 207,
   "mood": "happy",
   "emotion": "happy",
-  "activity": "idle_talking",
+  "activity": "idle",
   "horn_strikes": 0
 }
