@@ -216,12 +216,6 @@ If there is nothing worth remembering:
 
         auto_memory = self._detect_auto_memory(user_text)
 
-        if auto_memory.get("should_remember"):
-            memory_text = auto_memory.get("memory", "").strip()
-
-            if memory_text:
-                self.memory.add_unique(memory_text)
-
         self.history.append({
             "role": "user",
             "content": user_text
@@ -340,4 +334,3 @@ Return ONLY valid JSON:
                 "message": "You're awfully quiet over there... what are you doing?",
                 "emotion": "neutral",
             }
-

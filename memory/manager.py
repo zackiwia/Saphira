@@ -1,4 +1,6 @@
 ﻿import json
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 
@@ -44,6 +46,97 @@ class MemoryManager:
 
         if not memory:
             return False
+
+        self.memories.append(memory)
+        self.save()
+        return True
+
+    def _normalize_memory(self, memory):
+        """
+        Normalize memory wording so small differences do not
+        create duplicate memories.
+        """
+
+        text = str(memory).casefold()
+
+        # Remove common phrases that Ollama may add when describing
+        # the user instead of stating the fact directly.
+        replacements = [
+            r"\bthe user's\b",
+            r"\bthe user\b",
+            r"\buser's\b",
+            r"\buser\b",
+            r"\bthey are\b",
+            r"\bthey're\b",
+        ]
+
+        for pattern in replacements:
+            text = re.sub(pattern, " ", text)
+
+        # Keep only words and numbers.
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+
+        # Collapse whitespace.
+        words = text.split()
+
+        return " ".join(words)
+
+    def _memories_are_similar(self, first, second):
+        """
+        Determine whether two memories are probably describing
+        the same fact.
+        """
+
+        first_normalized = self._normalize_memory(first)
+        second_normalized = self._normalize_memory(second)
+
+        if not first_normalized or not second_normalized:
+            return False
+
+        # Exact match after normalization.
+        if first_normalized == second_normalized:
+            return True
+
+        first_words = set(first_normalized.split())
+        second_words = set(second_normalized.split())
+
+        if not first_words or not second_words:
+            return False
+
+        intersection = first_words & second_words
+        union = first_words | second_words
+
+        jaccard_similarity = len(intersection) / len(union)
+
+        # Strong word overlap.
+        if jaccard_similarity >= 0.80:
+            return True
+
+        # Also catch slightly different sentence structures.
+        sequence_similarity = SequenceMatcher(
+            None,
+            first_normalized,
+            second_normalized
+        ).ratio()
+
+        return sequence_similarity >= 0.88
+
+    def add_unique(self, memory):
+        """
+        Add a memory only if a similar memory does not already exist.
+        """
+
+        if not isinstance(memory, str):
+            return False
+
+        memory = memory.strip()
+
+        if not memory:
+            return False
+
+        for existing in self.memories:
+            if self._memories_are_similar(existing, memory):
+                return False
 
         self.memories.append(memory)
         self.save()
