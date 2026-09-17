@@ -1,4 +1,4 @@
-﻿import ctypes
+import ctypes
 import sys
 import random
 import time
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.animation import Animation, AnimationController
 from core.state import SaphiraState
 from vision.saphira_vision import SaphiraVision
 
@@ -84,6 +85,17 @@ class SaphiraWindow(QWidget):
         self.drag_offset = None
         self.worker = None
         self.flee_animation = None
+
+        # Central animation controller.
+        # The controller manages animation state and priority while
+        # SaphiraWindow remains responsible for rendering.
+        self.animation_controller = AnimationController()
+
+        self.animation_timer = QTimer(self)
+        self.animation_timer.timeout.connect(self.update_animations)
+        self.animation_timer.start(16)
+
+        self.register_base_animations()
         self.last_interaction = time.monotonic()
         self.idle_started_at = None
         self.idle_spoke = False
@@ -127,6 +139,151 @@ class SaphiraWindow(QWidget):
         self.horn_timer = QTimer(self)
         self.horn_timer.timeout.connect(self.check_horns)
         self.horn_timer.start(50)
+
+    # ---------- Animation engine ----------
+
+    def register_base_animations(self):
+        """
+        Register the initial animation states.
+
+        These are intentionally renderer-light placeholders.
+
+        The engine is being integrated before we create the final animation
+        artwork. This lets us verify transitions, priorities, interruption,
+        and timing using the real Saphira window first.
+        """
+
+        self.animation_controller.register(
+            "idle",
+            lambda: Animation(
+                name="idle",
+                duration=1.0,
+                priority=1,
+                loop=True,
+                interruptible=True,
+                on_update=self._animation_idle_update,
+            ),
+        )
+
+        self.animation_controller.register(
+            "thinking",
+            lambda: Animation(
+                name="thinking",
+                duration=0.0,
+                priority=5,
+                loop=True,
+                interruptible=True,
+                on_update=self._animation_thinking_update,
+            ),
+        )
+
+        self.animation_controller.register(
+            "talking",
+            lambda: Animation(
+                name="talking",
+                duration=0.0,
+                priority=6,
+                loop=True,
+                interruptible=True,
+                on_update=self._animation_talking_update,
+            ),
+        )
+
+        self.animation_controller.register(
+            "reaction",
+            lambda: Animation(
+                name="reaction",
+                duration=0.35,
+                priority=7,
+                loop=False,
+                interruptible=True,
+            ),
+        )
+
+        self.animation_controller.register(
+            "horn_dodge",
+            lambda: Animation(
+                name="horn_dodge",
+                duration=0.55,
+                priority=9,
+                loop=False,
+                interruptible=False,
+            ),
+        )
+
+    def play_animation(self, name, force=False):
+        """
+        Public entry point for future behavior systems.
+
+        Example:
+
+            self.play_animation("thinking")
+            self.play_animation("talking")
+            self.play_animation("idle")
+        """
+
+        try:
+            return self.animation_controller.play(
+                name,
+                force=force,
+            )
+        except KeyError:
+            print(
+                f"SAPHIRA ANIMATION: Unknown animation '{name}'"
+            )
+            return False
+
+    def update_animations(self):
+        """
+        Animation heartbeat.
+
+        60-ish updates per second gives us enough resolution for smooth
+        animation once actual movement/layer interpolation is introduced.
+        """
+
+        self.animation_controller.update()
+
+    def _animation_idle_update(self, progress):
+        """
+        Placeholder idle update.
+
+        Currently this intentionally does not alter the artwork.
+
+        Actual breathing, blinking, tail, wing, and body motion will be
+        added after the engine is verified inside the live application.
+        """
+        return
+
+    def _animation_thinking_update(self, progress):
+        """
+        Placeholder thinking update.
+
+        The final version will drive:
+        - thinking pose
+        - cheek tap
+        - eyes
+        - thought bubble
+        - subtle body motion
+        """
+        return
+
+    def _animation_talking_update(self, progress):
+        """
+        Placeholder talking update.
+
+        The final version will drive:
+        - mouth movement
+        - subtle head/body motion
+        - text reveal timing
+        """
+        return
+
+    def animation_state(self):
+        """
+        Return the current animation state for debugging and future
+        behavior logic.
+        """
+        return self.animation_controller.snapshot()
 
     # ---------- Windows capture exclusion ----------
 
@@ -405,10 +562,9 @@ class SaphiraWindow(QWidget):
         self.talk_button.setEnabled(False)
         self.input_box.setEnabled(False)
         self.state.data["activity"] = "thinking"
+        self.play_animation("thinking")
 
         # Give Saphira's brain the most recent temporary visual observation.
-        vision_context = self.vision.get_observation()
-
         vision_context = self.vision.get_observation()
 
         self.worker = BrainWorker(
@@ -428,6 +584,7 @@ class SaphiraWindow(QWidget):
         self.chat_box.append(f"<b>Saphira:</b> {message}")
         self.set_emotion(emotion)
         self.state.data["activity"] = "talking"
+        self.play_animation("talking")
         self.state.save()
 
     def on_brain_error(self, error):
