@@ -1,6 +1,8 @@
 import ctypes
+import html
 import sys
 import random
+import re
 import time
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QAction, QCursor, QPixmap
+from PySide6.QtGui import QAction, QCursor, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -91,6 +93,17 @@ class SaphiraWindow(QWidget):
         self.worker = None
         self.flee_animation = None
 
+        # Speaking / typewriter state
+        self.speaking_active = False
+        self.speaking_message = ""
+        self.speaking_index = 0
+
+        self.speaking_timer = QTimer(self)
+        self.speaking_timer.setInterval(45)
+        self.speaking_timer.timeout.connect(
+            self._advance_speaking_text
+        )
+
         # Central animation controller.
         # The controller manages animation state and priority while
         # SaphiraWindow remains responsible for rendering.
@@ -161,6 +174,101 @@ class SaphiraWindow(QWidget):
         self.horn_timer = QTimer(self)
         self.horn_timer.timeout.connect(self.check_horns)
         self.horn_timer.start(50)
+
+    # ---------- Speaking / typewriter ----------
+
+    def start_speaking(self, message, emotion="neutral"):
+        """Type Saphira's response progressively while talking."""
+
+        self.speaking_timer.stop()
+
+        self.speaking_message = str(message)
+
+        self.speaking_message = re.sub(
+            r'^\s*\*\*\s*Saphira\s*:\s*\*\*\s*',
+            '',
+            self.speaking_message,
+            flags=re.IGNORECASE,
+        )
+
+        self.speaking_message = re.sub(
+            r'^\s*Saphira\s*:\s*',
+            '',
+            self.speaking_message,
+            flags=re.IGNORECASE,
+        )
+
+        self.speaking_index = 0
+        self.speaking_active = True
+
+        self.set_emotion(emotion)
+        self.state.data["activity"] = "talking"
+
+        self.play_animation("talking", force=True)
+
+        cursor = self.chat_box.textCursor()
+        cursor.movePosition(QTextCursor.End)
+
+        if self.chat_box.toPlainText().strip():
+            cursor.insertBlock()
+
+        cursor.insertHtml("<b>Saphira:</b>&nbsp;")
+
+        fmt = cursor.charFormat()
+        fmt.setFontWeight(400)
+        cursor.setCharFormat(fmt)
+
+        self.speaking_cursor = cursor
+
+        self.chat_box.setTextCursor(cursor)
+        self.chat_box.ensureCursorVisible()
+
+        self.speaking_timer.start()
+
+    def _advance_speaking_text(self):
+        """Insert the next character of Saphira's response."""
+
+        if not self.speaking_active or self.speaking_cursor is None:
+            self.speaking_timer.stop()
+            return
+
+        if self.speaking_index >= len(self.speaking_message):
+            self.finish_speaking()
+            return
+
+        character = self.speaking_message[self.speaking_index]
+
+        self.speaking_cursor.insertText(character)
+
+        self.chat_box.setTextCursor(self.speaking_cursor)
+        self.chat_box.ensureCursorVisible()
+
+        self.speaking_index += 1
+
+        if self.speaking_index >= len(self.speaking_message):
+            self.finish_speaking()
+
+    def finish_speaking(self):
+        """Stop talking and return Saphira to idle."""
+
+        if not self.speaking_active:
+            return
+
+        self.speaking_active = False
+        self.speaking_timer.stop()
+        self.speaking_cursor = None
+
+        self.state.data["activity"] = "idle"
+        self.state.save()
+
+        self.play_animation(
+            "idle",
+            force=True,
+        )
+
+        self.input_box.setEnabled(True)
+        self.talk_button.setEnabled(True)
+        self.input_box.setFocus()
 
     # ---------- Animation engine ----------
 
@@ -260,10 +368,6 @@ class SaphiraWindow(QWidget):
         ):
             asset = self.animation_system.manager.get(name)
 
-            # Synchronize the logical animation state with the
-            # actual file animation. This prevents the controller
-            # from finishing a one-shot animation before the
-            # visual frame sequence has finished.
             if asset is not None:
                 frame_count = max(
                     1,
@@ -350,8 +454,6 @@ class SaphiraWindow(QWidget):
             ),
         }
 
-    # ---------- Windows capture exclusion ----------
-
     def exclude_from_capture(self):
         """
         Keep Saphira visible on the physical monitor while excluding
@@ -436,32 +538,6 @@ class SaphiraWindow(QWidget):
 
         except Exception:
             pass
-
-    def showEvent(self, event):
-        super().showEvent(event)
-
-        # The native window must exist before the affinity is applied.
-        QTimer.singleShot(
-            150,
-            self.exclude_from_capture
-        )
-
-    def closeEvent(self, event):
-        try:
-            self.vision.stop()
-        except Exception:
-            pass
-
-        self.restore_capture_visibility()
-
-        try:
-            self.save_preferred_position()
-        except Exception:
-            pass
-
-        event.accept()
-
-    # ---------- UI ----------
 
     def build_ui(self):
         self.setWindowFlags(
@@ -616,6 +692,8 @@ class SaphiraWindow(QWidget):
         self.state.save()
 
     @staticmethod
+
+    @staticmethod
     def mood_for_emotion(emotion):
         return {
             "happy": "happy",
@@ -636,19 +714,36 @@ class SaphiraWindow(QWidget):
 
     def send_message(self):
         text = self.input_box.text().strip()
+
         if not text or self.worker is not None:
             return
 
         self.register_interaction()
         self.input_box.clear()
-        self.chat_box.append(f"<b>You:</b> {text}")
+
+        cursor = self.chat_box.textCursor()
+        cursor.movePosition(QTextCursor.End)
+
+        if self.chat_box.toPlainText().strip():
+            cursor.insertBlock()
+
+        cursor.insertHtml("<b>You:</b>&nbsp;")
+
+        fmt = cursor.charFormat()
+        fmt.setFontWeight(400)
+        cursor.setCharFormat(fmt)
+
+        cursor.insertText(text)
+
+        self.chat_box.setTextCursor(cursor)
+        self.chat_box.ensureCursorVisible()
 
         self.talk_button.setEnabled(False)
         self.input_box.setEnabled(False)
+
         self.state.data["activity"] = "thinking"
         self.play_animation("thinking")
 
-        # Give Saphira's brain the most recent temporary visual observation.
         vision_context = self.vision.get_observation()
 
         self.worker = BrainWorker(
@@ -656,6 +751,7 @@ class SaphiraWindow(QWidget):
             user_text=text,
             vision_context=vision_context
         )
+
         self.worker.finished.connect(self.on_brain_result)
         self.worker.failed.connect(self.on_brain_error)
         self.worker.finished.connect(self.cleanup_worker)
@@ -665,27 +761,33 @@ class SaphiraWindow(QWidget):
     def on_brain_result(self, result):
         message = str(result.get("message", "..."))
         emotion = str(result.get("emotion", "neutral"))
-        self.chat_box.append(f"<b>Saphira:</b> {message}")
-        self.set_emotion(emotion)
-        self.state.data["activity"] = "talking"
-        self.play_animation("talking")
-        self.state.save()
+
+        self.start_speaking(message, emotion)
 
     def on_brain_error(self, error):
-        self.chat_box.append(f"<b>Saphira:</b> Hmph... {error}")
-        self.set_emotion("neutral")
+        self.start_speaking(
+            f"Hmph... {error}",
+            "neutral",
+        )
 
     def cleanup_worker(self, *_):
         if self.worker:
             self.worker.deleteLater()
+
         self.worker = None
+
+        if self.speaking_active:
+            return
+
         self.talk_button.setEnabled(True)
         self.input_box.setEnabled(True)
         self.input_box.setFocus()
 
-    # ---------- Idle behavior ----------
-
     def update_behavior(self):
+        # Never let idle behavior interrupt active speech.
+        if self.speaking_active:
+            return
+
         elapsed_ms = int((time.monotonic() - self.last_interaction) * 1000)
 
         if elapsed_ms < self.IDLE_AFTER_MS:
@@ -748,7 +850,7 @@ class SaphiraWindow(QWidget):
     def on_idle_result(self, result):
         message = str(result.get("message", "..."))
         emotion = str(result.get("emotion", "neutral"))
-        self.chat_box.append(f"<b>Saphira:</b> {message}")
+        self.start_speaking(message, emotion)
         self.set_emotion(emotion)
         self.state.data["activity"] = "idle"
         self.state.save()
@@ -1073,6 +1175,7 @@ class SaphiraWindow(QWidget):
         self.save_preferred_position()
         self.state.save()
         event.accept()
+
 
 
 
