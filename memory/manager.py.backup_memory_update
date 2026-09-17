@@ -59,6 +59,8 @@ class MemoryManager:
 
         text = str(memory).casefold()
 
+        # Remove common phrases that Ollama may add when describing
+        # the user instead of stating the fact directly.
         replacements = [
             r"\bthe user's\b",
             r"\bthe user\b",
@@ -71,8 +73,10 @@ class MemoryManager:
         for pattern in replacements:
             text = re.sub(pattern, " ", text)
 
+        # Keep only words and numbers.
         text = re.sub(r"[^a-z0-9\s]", " ", text)
 
+        # Collapse whitespace.
         words = text.split()
 
         return " ".join(words)
@@ -89,6 +93,7 @@ class MemoryManager:
         if not first_normalized or not second_normalized:
             return False
 
+        # Exact match after normalization.
         if first_normalized == second_normalized:
             return True
 
@@ -103,9 +108,11 @@ class MemoryManager:
 
         jaccard_similarity = len(intersection) / len(union)
 
+        # Strong word overlap.
         if jaccard_similarity >= 0.80:
             return True
 
+        # Also catch slightly different sentence structures.
         sequence_similarity = SequenceMatcher(
             None,
             first_normalized,
@@ -113,87 +120,6 @@ class MemoryManager:
         ).ratio()
 
         return sequence_similarity >= 0.88
-
-    def find_similar(self, memory):
-        """
-        Return the index of the most similar existing memory.
-
-        Returns None when no similar memory exists.
-        """
-
-        if not isinstance(memory, str):
-            return None
-
-        memory = memory.strip()
-
-        if not memory:
-            return None
-
-        best_index = None
-        best_score = 0.0
-
-        target = self._normalize_memory(memory)
-
-        if not target:
-            return None
-
-        target_words = set(target.split())
-
-        for index, existing in enumerate(self.memories):
-            existing_normalized = self._normalize_memory(existing)
-
-            if not existing_normalized:
-                continue
-
-            if target == existing_normalized:
-                return index
-
-            existing_words = set(existing_normalized.split())
-
-            if not existing_words:
-                continue
-
-            intersection = target_words & existing_words
-            union = target_words | existing_words
-
-            jaccard = len(intersection) / len(union)
-
-            sequence = SequenceMatcher(
-                None,
-                target,
-                existing_normalized
-            ).ratio()
-
-            score = max(jaccard, sequence)
-
-            if score > best_score:
-                best_score = score
-                best_index = index
-
-        if best_score >= 0.80:
-            return best_index
-
-        return None
-
-    def update(self, index, memory):
-        """
-        Replace an existing memory with newer information.
-        """
-
-        if not isinstance(memory, str):
-            return False
-
-        memory = memory.strip()
-
-        if not memory:
-            return False
-
-        if index < 0 or index >= len(self.memories):
-            return False
-
-        self.memories[index] = memory
-        self.save()
-        return True
 
     def add_unique(self, memory):
         """
