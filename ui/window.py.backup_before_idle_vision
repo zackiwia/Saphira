@@ -1,5 +1,4 @@
-﻿import ctypes
-import random
+﻿import random
 import time
 from pathlib import Path
 
@@ -44,7 +43,7 @@ class BrainWorker(QThread):
     def run(self):
         try:
             if self.idle:
-                result = self.brain.idle_prompt(self.context, vision_context=self.vision_context)
+                result = self.brain.idle_prompt(self.context)
             else:
                 result = self.brain.reply(self.user_text, vision_context=self.vision_context)
             self.finished.emit(result)
@@ -673,55 +672,12 @@ class SaphiraWindow(QWidget):
         self.input_box.setVisible(visible)
         self.talk_button.setVisible(visible)
         self.adjustSize()
-    def _exclude_from_screen_capture(self):
-        """Keep Saphira visible normally but exclude her window from screen capture.
-
-        Windows 10 version 2004+ supports WDA_EXCLUDEFROMCAPTURE.
-        This lets Vision capture the desktop without capturing Saphira herself.
-        """
-        try:
-            user32 = ctypes.windll.user32
-
-            # WDA_EXCLUDEFROMCAPTURE
-            # Supported on Windows 10 version 2004 and newer.
-            WDA_EXCLUDEFROMCAPTURE = 0x00000011
-
-            hwnd = int(self.winId())
-
-            if hwnd == 0:
-                print("[VISION] Could not obtain Saphira window handle.")
-                return False
-
-            result = user32.SetWindowDisplayAffinity(
-                hwnd,
-                WDA_EXCLUDEFROMCAPTURE
-            )
-
-            if result:
-                print("[VISION] Saphira window excluded from screen capture.")
-                return True
-
-            error_code = ctypes.get_last_error()
-            print(
-                f"[VISION] Could not exclude Saphira from capture "
-                f"(Windows error {error_code})."
-            )
-            return False
-
-        except Exception as exc:
-            print(f"[VISION] Capture exclusion error: {exc}")
-            return False
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._exclude_from_screen_capture()
 
     def closeEvent(self, event):
         self.vision.stop()
         self.save_preferred_position()
         self.state.save()
         event.accept()
-
-
 
 
 
