@@ -11,12 +11,14 @@ class SaphiraVision:
     The window can request the latest observation at any time.
     """
 
-    def __init__(self, config, interval=30):
+    def __init__(self, config, scheduler, interval=30):
         self.config = config
         self.interval = interval
+        self.scheduler = scheduler
 
         self.background = BackgroundVision(
             config,
+            scheduler=scheduler,
             interval_seconds=interval
         )
 
@@ -46,3 +48,6 @@ class SaphiraVision:
     @property
     def running(self):
         return self._running
+
+
+

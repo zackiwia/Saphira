@@ -1,10 +1,11 @@
-import json
+﻿import json
 import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from core.brain import SaphiraBrain
+from core.scheduler import SaphiraScheduler
 from ui.window import SaphiraWindow
 
 
@@ -18,8 +19,9 @@ def main():
     app = QApplication(sys.argv)
     config = load_config()
 
-    brain = SaphiraBrain(config)
-    window = SaphiraWindow(brain, config)
+    scheduler = SaphiraScheduler()
+    brain = SaphiraBrain(config, scheduler=scheduler)
+    window = SaphiraWindow(brain, config, scheduler)
     window.show()
 
     sys.exit(app.exec())
@@ -27,3 +29,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

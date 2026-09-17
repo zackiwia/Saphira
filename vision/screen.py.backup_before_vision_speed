@@ -7,7 +7,7 @@ from PIL import ImageGrab
 
 
 class SaphiraVision:
-    def __init__(self, config, scheduler):
+    def __init__(self, config):
         ollama_config = config["ollama"]
 
         self.base_url = ollama_config["url"].rstrip("/")
@@ -15,7 +15,6 @@ class SaphiraVision:
             "vision_model",
             ollama_config["model"]
         )
-        self.scheduler = scheduler
 
     def capture_screen(self, output_path=None):
         if output_path is None:
@@ -43,24 +42,18 @@ class SaphiraVision:
                 f"Vision image is empty: {image_path}"
             )
 
-        image_data = base64.b64encode(
-            image_bytes
-        ).decode("utf-8")
+        image_data = base64.b64encode(image_bytes).decode("utf-8")
 
         payload = {
             "model": self.model,
             "messages": [
                 {
                     "role": "user",
-                    "content": prompt,
                     "images": [image_data],
+                    "content": prompt
                 }
             ],
-            "stream": False,
-            "options": {
-                "num_predict": 512,
-                "temperature": 0.2,
-            },
+            "stream": False
         }
 
         data = json.dumps(payload).encode("utf-8")
@@ -71,43 +64,34 @@ class SaphiraVision:
             headers={
                 "Content-Type": "application/json"
             },
-            method="POST",
+            method="POST"
         )
 
-        def perform_inference():
-            with urllib.request.urlopen(
-                request,
-                timeout=180
-            ) as response:
-                return json.loads(
-                    response.read().decode("utf-8")
-                )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
 
-        result = self.scheduler.run(
-            "vision",
-            perform_inference
+        return result.get(
+            "message", {}
+        ).get(
+            "content",
+            ""
         )
-
-        message = result.get("message", {})
-
-        return message.get("content", "")
 
     def observe_screen(self):
         prompt = """
-Look at this screenshot and answer directly.
+Analyze this screenshot for Saphira.
 
 Identify:
-1. What game or application is visible?
-2. What is happening right now?
-3. What important things should Saphira know?
-4. What important text can you read?
+- What application or game is visible.
+- What is currently happening.
+- Important things Saphira should know about.
+- Important readable text.
 
-Keep the answer around 80 words.
-
-Do not explain your reasoning.
-Do not show your thinking.
-Do not speculate.
-Only give the final observation.
+Keep the response under 80 words.
+Do not describe every object.
+Do not invent information that cannot be clearly seen.
 """
 
         image_path = self.capture_screen()
@@ -124,7 +108,6 @@ Only give the final observation.
             image_path,
             prompt
         )
-
     def see_screen(self, prompt=None):
         if prompt is None:
             return self.observe_screen()
@@ -143,6 +126,4 @@ Only give the final observation.
             image_path,
             prompt
         )
-
-
 

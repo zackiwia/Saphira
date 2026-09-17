@@ -12,11 +12,12 @@ class BackgroundVision:
     Only the newest observation is retained in memory.
     """
 
-    def __init__(self, config, interval_seconds=60):
+    def __init__(self, config, scheduler, interval_seconds=60):
         self.config = config
         self.interval_seconds = interval_seconds
+        self.scheduler = scheduler
 
-        self.vision = SaphiraVision(config)
+        self.vision = SaphiraVision(config, scheduler=scheduler)
 
         self.latest_observation = None
         self.last_capture_time = None
@@ -134,3 +135,5 @@ class BackgroundVision:
             while self.running and remaining > 0:
                 time.sleep(min(1, remaining))
                 remaining -= 1
+
+
