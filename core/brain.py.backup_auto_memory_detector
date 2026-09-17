@@ -117,104 +117,11 @@ class SaphiraBrain:
             "emotion": emotion,
         }
 
-    def _detect_auto_memory(self, user_text):
-        """
-        Ask Ollama whether a normal conversation message contains
-        a useful long-term personal fact.
-
-        This function ONLY detects a candidate.
-        It does NOT save anything.
-        """
-
-        prompt = f"""
-You are Saphira's memory detector.
-
-Decide whether the user's message contains a useful personal fact
-that would reasonably help Saphira understand or remember the user
-in future conversations.
-
-Good candidates include:
-- preferences
-- favorite things
-- hobbies
-- ongoing projects
-- important goals
-- recurring activities
-- useful personal circumstances
-- names of important people, pets, or characters
-- stable likes or dislikes
-
-Do NOT select:
-- random temporary statements
-- ordinary conversation
-- questions with no personal fact
-- jokes
-- greetings
-- facts about unrelated public topics
-- information that is obviously only relevant to this single message
-
-Only identify information about the user or their ongoing context.
-
-User message:
-{user_text}
-
-Return ONLY valid JSON in exactly this format:
-
-{{
-  "should_remember": true,
-  "memory": "short clear description of the useful fact"
-}}
-
-If there is nothing worth remembering:
-
-{{
-  "should_remember": false,
-  "memory": ""
-}}
-"""
-
-        messages = [
-            {
-                "role": "system",
-                "content": prompt
-            }
-        ]
-
-        try:
-            content = self._call_ollama(
-                messages,
-                temperature=0.1
-            )
-
-            result = self._extract_json(content)
-
-            if not isinstance(result, dict):
-                return {
-                    "should_remember": False,
-                    "memory": ""
-                }
-
-            should_remember = result.get("should_remember", False)
-            memory = str(result.get("memory", "")).strip()
-
-            return {
-                "should_remember": bool(should_remember) and bool(memory),
-                "memory": memory
-            }
-
-        except Exception:
-            return {
-                "should_remember": False,
-                "memory": ""
-            }
-
     def reply(self, user_text):
         explicit_memory = self._handle_explicit_memory(user_text)
 
         if explicit_memory is not None:
             return explicit_memory
-
-        auto_memory = self._detect_auto_memory(user_text)
 
         self.history.append({
             "role": "user",
@@ -253,22 +160,19 @@ If there is nothing worth remembering:
 
             return {
                 "message": message,
-                "emotion": emotion,
-                "memory_candidate": auto_memory
+                "emotion": emotion
             }
 
         except urllib.error.URLError as exc:
             return {
                 "message": f"I can't reach Ollama right now: {exc}",
                 "emotion": "neutral",
-                "memory_candidate": auto_memory
             }
 
         except Exception as exc:
             return {
                 "message": f"Something went wrong: {exc}",
                 "emotion": "neutral",
-                "memory_candidate": auto_memory
             }
 
     def idle_prompt(self, context=""):
