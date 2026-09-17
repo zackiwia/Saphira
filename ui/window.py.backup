@@ -83,31 +83,14 @@ class SaphiraWindow(QWidget):
         self.idle_started_at = None
         self.idle_spoke = False
         self.idle_moved = False
-        # Horn defense is session-based.
-        # Never allow an old saved strike count to carry into a new launch.
-        self.horn_strikes = 0
         self.horn_armed = True
-
         self.horn_reset_timer = QTimer(self)
         self.horn_reset_timer.setSingleShot(True)
         self.horn_reset_timer.timeout.connect(self.reset_horn_strikes)
-        self.horn_reset_timer.setSingleShot(True)
-        self.horn_reset_timer.timeout.connect(self.reset_horn_strikes)
-
-        # Horn strikes never carry across application restarts.
-        self.state.data["horn_strikes"] = 0
-        self.state.save()
 
         self.build_ui()
         self.load_saved_position()
-
-        # Saphira always starts in her neutral expression.
-        # Her position is remembered, but her temporary emotional state
-        # should not carry over between launches.
-        self.set_emotion("neutral")
-
-        # Give the chat input focus when Saphira starts.
-        self.input_box.setFocus()
+        self.set_emotion(self.state.data.get("emotion", "neutral"))
 
         self.behavior_timer = QTimer(self)
         self.behavior_timer.timeout.connect(self.update_behavior)
@@ -133,70 +116,22 @@ class SaphiraWindow(QWidget):
 
         self.chat_box = QTextEdit(self)
         self.chat_box.setReadOnly(True)
-        self.chat_box.setMinimumHeight(170)
-        self.chat_box.setMaximumHeight(190)
+        self.chat_box.setFixedHeight(130)
         self.chat_box.setStyleSheet("""
             QTextEdit {
-                background: rgba(15, 15, 25, 235);
+                background: rgba(15, 15, 25, 225);
                 color: white;
-                border: 2px solid rgba(100, 160, 255, 170);
+                border: 1px solid rgba(100, 160, 255, 150);
                 border-radius: 10px;
-                padding: 8px;
-                font-size: 14px;
+                padding: 6px;
             }
         """)
 
         self.input_box = QLineEdit(self)
-        self.input_box.setMinimumHeight(46)
         self.input_box.setPlaceholderText("Talk to Saphira...")
-        self.input_box.setFocusPolicy(Qt.StrongFocus)
-        self.input_box.setStyleSheet("""
-            QLineEdit {
-                background: rgba(20, 20, 32, 245);
-                color: white;
-                border: 2px solid rgba(100, 160, 255, 190);
-                border-radius: 10px;
-                padding: 8px 12px;
-                font-size: 15px;
-            }
-
-            QLineEdit:focus {
-                border: 2px solid rgba(130, 190, 255, 255);
-                background: rgba(25, 25, 40, 250);
-            }
-
-            QLineEdit:disabled {
-                color: rgba(255, 255, 255, 150);
-            }
-        """)
         self.input_box.returnPressed.connect(self.send_message)
 
         self.talk_button = QPushButton("Talk", self)
-        self.talk_button.setMinimumHeight(46)
-        self.talk_button.setMinimumWidth(80)
-        self.talk_button.setStyleSheet("""
-            QPushButton {
-                background: rgba(35, 45, 75, 245);
-                color: white;
-                border: 2px solid rgba(100, 160, 255, 190);
-                border-radius: 10px;
-                padding: 8px 14px;
-                font-size: 14px;
-            }
-
-            QPushButton:hover {
-                background: rgba(50, 65, 100, 250);
-                border: 2px solid rgba(130, 190, 255, 255);
-            }
-
-            QPushButton:pressed {
-                background: rgba(25, 35, 60, 250);
-            }
-
-            QPushButton:disabled {
-                color: rgba(255, 255, 255, 130);
-            }
-        """)
         self.talk_button.clicked.connect(self.send_message)
 
         controls = QHBoxLayout()
@@ -494,7 +429,6 @@ class SaphiraWindow(QWidget):
         return False
 
     def check_horns(self):
-        # Do not check for another horn hit while Saphira is already fleeing.
         if self.flee_animation is not None:
             return
 
@@ -505,58 +439,17 @@ class SaphiraWindow(QWidget):
             self.horn_strike()
 
         elif not near:
-            # The cursor must leave the horn area before another strike
-            # can be registered.
             self.horn_armed = True
-
-    def horn_reaction(self, strikes):
-        # Different reactions depending on how many times
-        # the user has touched Saphira's horns.
-        reactions = {
-            1: [
-                "Hey! Don't touch my horns!",
-                "E-Eek! My horns are sensitive!",
-                "Hands off the horns!",
-                "What are you doing?! Don't touch those!",
-                "Hey! Those aren't handles!",
-            ],
-            2: [
-                "I told you to stop touching my horns!",
-                "Again?! Seriously?!",
-                "H-Hey! I warned you!",
-                "You're really testing my patience now...",
-                "Stop poking my horns!",
-            ],
-        }
-
-        if strikes >= self.HORN_MAX_STRIKES:
-            return "THAT'S IT! I'm leaving before you touch them again!"
-
-        options = reactions.get(strikes, reactions[2])
-        return random.choice(options)
 
     def horn_strike(self):
         self.register_interaction()
 
-        # Horn strikes are intentionally session-only.
-        # This prevents state.json from causing an unexpected strike
-        # count after Saphira is restarted.
-        self.horn_strikes += 1
-        strikes = self.horn_strikes
-
+        strikes = int(self.state.data.get("horn_strikes", 0)) + 1
         self.state.data["horn_strikes"] = strikes
         self.state.data["activity"] = "fleeing"
         self.state.save()
 
-        # React immediately when the horn is touched.
-        reaction = self.horn_reaction(strikes)
-        self.chat_box.append(f"<b>Saphira:</b> {reaction}")
-
-        # Every horn strike restarts the 10-second countdown.
-        # If no additional strike occurs for 10 seconds, the count
-        # returns to zero AND the horn detector is re-armed.
         self.horn_reset_timer.start(self.HORN_RESET_MS)
-
         self.set_emotion("shocked")
 
         # Move away from the cursor while staying inside the screen.
@@ -574,7 +467,10 @@ class SaphiraWindow(QWidget):
         )
 
         if strikes >= self.HORN_MAX_STRIKES:
-            # Third strike: flee, then exit.
+            # Third strike: flee, say something, then exit.
+            self.chat_box.append(
+                "<b>Saphira:</b> THAT'S IT! I'm leaving before you do it again!"
+            )
             self.move_smoothly(target, self.FLEE_DURATION_MS)
             QTimer.singleShot(
                 self.FLEE_DURATION_MS + 900,
@@ -585,11 +481,6 @@ class SaphiraWindow(QWidget):
         self.move_smoothly(target, self.FLEE_DURATION_MS)
 
     def reset_horn_strikes(self):
-        # Reset both the visible/saved counter and the actual
-        # in-memory horn defense state.
-        self.horn_strikes = 0
-        self.horn_armed = True
-
         self.state.data["horn_strikes"] = 0
         self.state.save()
 

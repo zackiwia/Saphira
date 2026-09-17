@@ -100,11 +100,7 @@ class SaphiraWindow(QWidget):
 
         self.build_ui()
         self.load_saved_position()
-
-        # Saphira always starts in her neutral expression.
-        # Her position is remembered, but her temporary emotional state
-        # should not carry over between launches.
-        self.set_emotion("neutral")
+        self.set_emotion(self.state.data.get("emotion", "neutral"))
 
         # Give the chat input focus when Saphira starts.
         self.input_box.setFocus()
@@ -509,32 +505,6 @@ class SaphiraWindow(QWidget):
             # can be registered.
             self.horn_armed = True
 
-    def horn_reaction(self, strikes):
-        # Different reactions depending on how many times
-        # the user has touched Saphira's horns.
-        reactions = {
-            1: [
-                "Hey! Don't touch my horns!",
-                "E-Eek! My horns are sensitive!",
-                "Hands off the horns!",
-                "What are you doing?! Don't touch those!",
-                "Hey! Those aren't handles!",
-            ],
-            2: [
-                "I told you to stop touching my horns!",
-                "Again?! Seriously?!",
-                "H-Hey! I warned you!",
-                "You're really testing my patience now...",
-                "Stop poking my horns!",
-            ],
-        }
-
-        if strikes >= self.HORN_MAX_STRIKES:
-            return "THAT'S IT! I'm leaving before you touch them again!"
-
-        options = reactions.get(strikes, reactions[2])
-        return random.choice(options)
-
     def horn_strike(self):
         self.register_interaction()
 
@@ -547,10 +517,6 @@ class SaphiraWindow(QWidget):
         self.state.data["horn_strikes"] = strikes
         self.state.data["activity"] = "fleeing"
         self.state.save()
-
-        # React immediately when the horn is touched.
-        reaction = self.horn_reaction(strikes)
-        self.chat_box.append(f"<b>Saphira:</b> {reaction}")
 
         # Every horn strike restarts the 10-second countdown.
         # If no additional strike occurs for 10 seconds, the count
@@ -574,7 +540,10 @@ class SaphiraWindow(QWidget):
         )
 
         if strikes >= self.HORN_MAX_STRIKES:
-            # Third strike: flee, then exit.
+            # Third strike: flee, say something, then exit.
+            self.chat_box.append(
+                "<b>Saphira:</b> THAT'S IT! I'm leaving before you do it again!"
+            )
             self.move_smoothly(target, self.FLEE_DURATION_MS)
             QTimer.singleShot(
                 self.FLEE_DURATION_MS + 900,

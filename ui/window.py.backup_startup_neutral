@@ -100,11 +100,7 @@ class SaphiraWindow(QWidget):
 
         self.build_ui()
         self.load_saved_position()
-
-        # Saphira always starts in her neutral expression.
-        # Her position is remembered, but her temporary emotional state
-        # should not carry over between launches.
-        self.set_emotion("neutral")
+        self.set_emotion(self.state.data.get("emotion", "neutral"))
 
         # Give the chat input focus when Saphira starts.
         self.input_box.setFocus()
