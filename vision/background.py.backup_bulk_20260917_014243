@@ -6,28 +6,18 @@ from vision.screen import SaphiraVision
 
 class BackgroundVision:
     """
-    Saphira's continuous visual awareness.
+    Saphira's background visual awareness.
 
-    The desktop is checked frequently, but expensive Vision inference
-    only happens when the screen meaningfully changes.
+    Vision runs independently from the main UI and conversation.
+    Only the newest observation is retained in memory.
     """
 
-    CAPTURE_INTERVAL_SECONDS = 5
-
-    def __init__(
-        self,
-        config,
-        scheduler,
-        interval_seconds=5
-    ):
+    def __init__(self, config, scheduler, interval_seconds=60):
         self.config = config
         self.interval_seconds = interval_seconds
         self.scheduler = scheduler
 
-        self.vision = SaphiraVision(
-            config,
-            scheduler=scheduler
-        )
+        self.vision = SaphiraVision(config, scheduler=scheduler)
 
         self.latest_observation = None
         self.last_capture_time = None
@@ -41,6 +31,7 @@ class BackgroundVision:
         self._lock = threading.Lock()
 
     def start(self):
+        """Start background vision."""
         if self.running:
             return
 
@@ -55,13 +46,16 @@ class BackgroundVision:
         self.thread.start()
 
     def stop(self):
+        """Stop background vision after the current scan finishes."""
         self.running = False
 
     def get_latest_observation(self):
+        """Return the newest visual observation."""
         with self._lock:
             return self.latest_observation
 
     def get_status(self):
+        """Return current Vision status."""
         with self._lock:
             return {
                 "running": self.running,
@@ -69,12 +63,11 @@ class BackgroundVision:
                 "last_capture_time": self.last_capture_time,
                 "last_duration": self.last_duration,
                 "last_error": self.last_error,
-                "has_observation": (
-                    self.latest_observation is not None
-                ),
+                "has_observation": self.latest_observation is not None,
             }
 
     def _scan_once(self):
+        """Perform exactly one Vision scan."""
         started = time.perf_counter()
 
         with self._lock:
@@ -83,48 +76,34 @@ class BackgroundVision:
 
         try:
             print("")
-            print(
-                "BACKGROUND VISION: Checking desktop..."
-            )
+            print("BACKGROUND VISION: Starting scan...")
 
-            observation = (
-                self.vision.observe_screen()
-            )
+            observation = self.vision.observe_screen()
 
-            duration = (
-                time.perf_counter() - started
-            )
+            duration = time.perf_counter() - started
 
             with self._lock:
-                if observation:
-                    self.latest_observation = observation
-
+                self.latest_observation = observation
                 self.last_capture_time = time.time()
                 self.last_duration = duration
 
             print(
-                "BACKGROUND VISION: Check complete "
-                f"({duration:.2f}s)"
+                f"BACKGROUND VISION: Scan complete "
+                f"({duration:.1f}s)"
             )
 
-            if observation:
-                print(
-                    "BACKGROUND VISION OBSERVATION:"
-                )
-                print(observation)
+            print("BACKGROUND VISION:")
+            print(observation)
 
-        except Exception as exc:
-            duration = (
-                time.perf_counter() - started
-            )
+        except Exception as e:
+            duration = time.perf_counter() - started
 
             with self._lock:
                 self.last_duration = duration
-                self.last_error = str(exc)
+                self.last_error = str(e)
 
             print(
-                "BACKGROUND VISION ERROR: "
-                f"{exc}"
+                f"BACKGROUND VISION ERROR: {e}"
             )
 
         finally:
@@ -132,6 +111,13 @@ class BackgroundVision:
                 self.busy = False
 
     def _run(self):
+        """
+        Main background loop.
+
+        A new scan never starts until the previous scan has finished.
+        The interval begins AFTER the previous scan completes.
+        """
+
         while self.running:
 
             self._scan_once()
@@ -139,15 +125,15 @@ class BackgroundVision:
             if not self.running:
                 break
 
-            remaining = (
-                self.interval_seconds
+            print(
+                f"BACKGROUND VISION: "
+                f"Next scan in {self.interval_seconds}s."
             )
 
-            while (
-                self.running
-                and remaining > 0
-            ):
-                time.sleep(
-                    min(1, remaining)
-                )
+            remaining = self.interval_seconds
+
+            while self.running and remaining > 0:
+                time.sleep(min(1, remaining))
                 remaining -= 1
+
+

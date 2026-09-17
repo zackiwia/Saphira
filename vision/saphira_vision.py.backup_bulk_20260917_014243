@@ -5,18 +5,13 @@ from vision.background import BackgroundVision
 
 class SaphiraVision:
     """
-    Connects Saphira's desktop window to visual awareness.
+    Connects Saphira's desktop window to the background vision system.
 
-    The UI receives the newest completed observation without waiting
-    for Vision inference.
+    Vision runs independently from the UI thread.
+    The window can request the latest observation at any time.
     """
 
-    def __init__(
-        self,
-        config,
-        scheduler,
-        interval=5
-    ):
+    def __init__(self, config, scheduler, interval=30):
         self.config = config
         self.interval = interval
         self.scheduler = scheduler
@@ -50,14 +45,9 @@ class SaphiraVision:
     def get_status(self):
         return self.background.get_status()
 
-    def force_observation(self):
-        """
-        Perform an immediate fresh observation.
-        """
-        return self.background.vision.observe_screen(
-            force=True
-        )
-
     @property
     def running(self):
         return self._running
+
+
+

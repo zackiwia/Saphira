@@ -1,4 +1,5 @@
 ﻿import ctypes
+import sys
 import random
 import time
 from pathlib import Path
@@ -55,8 +56,8 @@ class BrainWorker(QThread):
 class SaphiraWindow(QWidget):
     """Desktop companion window with behavior state and lightweight autonomy."""
 
-    IDLE_AFTER_MS = 30_000
-    IDLE_SPEAK_AFTER_MS = 60_000
+    IDLE_AFTER_MS = 15_000
+    IDLE_SPEAK_AFTER_MS = 35_000
     HORN_RESET_MS = 10_000
     HORN_MAX_STRIKES = 3
 
@@ -94,7 +95,7 @@ class SaphiraWindow(QWidget):
 
         # Background Vision service.
         # Vision runs independently from the UI thread.
-        self.vision = SaphiraVision(config, scheduler=scheduler, interval=30)
+        self.vision = SaphiraVision(config, scheduler=scheduler, interval=5)
         self.vision.start()
 
 
@@ -126,6 +127,117 @@ class SaphiraWindow(QWidget):
         self.horn_timer = QTimer(self)
         self.horn_timer.timeout.connect(self.check_horns)
         self.horn_timer.start(50)
+
+    # ---------- Windows capture exclusion ----------
+
+    def exclude_from_capture(self):
+        """
+        Keep Saphira visible on the physical monitor while excluding
+        her window from supported Windows screen-capture APIs.
+        """
+        if sys.platform != "win32":
+            return False
+
+        try:
+            hwnd = int(self.winId())
+
+            user32 = ctypes.WinDLL(
+                "user32",
+                use_last_error=True
+            )
+
+            set_affinity = user32.SetWindowDisplayAffinity
+            set_affinity.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+            ]
+            set_affinity.restype = ctypes.c_bool
+
+            # Windows 10 2004+:
+            # 0x11 = WDA_EXCLUDEFROMCAPTURE
+            success = set_affinity(
+                hwnd,
+                0x00000011
+            )
+
+            if success:
+                self.capture_excluded = True
+                print(
+                    "SAPHIRA CAPTURE: Window excluded from screen capture."
+                )
+                return True
+
+            error = ctypes.get_last_error()
+
+            print(
+                "SAPHIRA CAPTURE: Could not exclude window "
+                f"(Windows error {error})."
+            )
+
+        except Exception as exc:
+            print(
+                "SAPHIRA CAPTURE: Exclusion error: "
+                f"{exc}"
+            )
+
+        self.capture_excluded = False
+        return False
+
+    def restore_capture_visibility(self):
+        """
+        Remove the Windows capture exclusion when Saphira closes.
+        """
+        if sys.platform != "win32":
+            return
+
+        try:
+            hwnd = int(self.winId())
+
+            user32 = ctypes.WinDLL(
+                "user32",
+                use_last_error=True
+            )
+
+            set_affinity = user32.SetWindowDisplayAffinity
+            set_affinity.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+            ]
+            set_affinity.restype = ctypes.c_bool
+
+            set_affinity(
+                hwnd,
+                0x00000000
+            )
+
+            self.capture_excluded = False
+
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+
+        # The native window must exist before the affinity is applied.
+        QTimer.singleShot(
+            150,
+            self.exclude_from_capture
+        )
+
+    def closeEvent(self, event):
+        try:
+            self.vision.stop()
+        except Exception:
+            pass
+
+        self.restore_capture_visibility()
+
+        try:
+            self.save_preferred_position()
+        except Exception:
+            pass
+
+        event.accept()
 
     # ---------- UI ----------
 
@@ -357,7 +469,7 @@ class SaphiraWindow(QWidget):
 
         # Give her time to become idle before she decides to move somewhere
         # more comfortable.
-        if idle_elapsed_ms >= 45_000 and not self.idle_moved:
+        if idle_elapsed_ms >= 25_000 and not self.idle_moved:
             self.idle_moved = True
             self.state.data["activity"] = "wandering"
             self.move_to_comfortable_position()
@@ -720,6 +832,8 @@ class SaphiraWindow(QWidget):
         self.save_preferred_position()
         self.state.save()
         event.accept()
+
+
 
 
 
