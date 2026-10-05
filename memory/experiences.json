@@ -1,0 +1,42 @@
+{
+  "activities": [
+    {
+      "activity": "Watching YouTube",
+      "details": "The user is watching content from the YouTuber Slimesicle.",
+      "first_seen": "2026-09-18T07:01:11",
+      "last_seen": "2026-09-18T07:01:11",
+      "count": 1
+    },
+    {
+      "activity": "Monster Hunter Wilds",
+      "details": "The user is returning to playing Monster Hunter Wilds.",
+      "first_seen": "2026-09-18T07:57:20",
+      "last_seen": "2026-09-18T07:57:20",
+      "count": 1
+    }
+  ],
+  "game_facts": [
+    {
+      "game": "Metal Gear",
+      "subject": "",
+      "fact": "The user identified the game being discussed as Metal Gear.",
+      "first_seen": "2026-09-18T07:39:40",
+      "last_seen": "2026-09-18T07:39:40"
+    },
+    {
+      "game": "Monster Hunter Wilds",
+      "subject": "",
+      "fact": "The user is returning to playing Monster Hunter Wilds.",
+      "first_seen": "2026-09-18T07:57:20",
+      "last_seen": "2026-09-18T07:57:20"
+    },
+    {
+      "game": "Monster Hunter Wilds",
+      "subject": "Jin Dahaad",
+      "fact": "The user fought Jin Dahaad.",
+      "first_seen": "2026-09-18T07:58:17",
+      "last_seen": "2026-09-18T07:58:17"
+    }
+  ],
+  "observations": []
+}
